@@ -280,15 +280,14 @@
         </div>
       </div>
       <!-- Send File Form -->
-      <div id="sendForm" class="form">
-        <input type="file" id="fileInput" />
-        <input
-          type="text"
-          id="peerIdSend"
-          placeholder="Enter Receiver's Peer ID"
-        />
-        <button class="send-button" onclick="sendFile()">Send File</button>
-      </div>
+      
+      <!-- Send File Form -->
+<div id="sendForm" class="form">
+  <input type="file" id="fileInput" />
+  <input type="text" id="peerIdSend" placeholder="Enter Receiver's Peer ID" />
+  <button class="send-button" onclick="sendFile()">Send File</button>
+</div>
+
 
       <!-- Receive File Form -->
       <div id="receiveForm" class="form">
@@ -302,7 +301,65 @@
       </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/jwt-decode/build/jwt-decode.min.js"></script>
+    <!-- HTML input for file selection -->
+
+
+    
     <script>
+async function computeHash(input) {
+  let buffer;
+
+  if (input instanceof Blob) {
+    buffer = await input.arrayBuffer(); // ✅ async
+  } else if (input instanceof ArrayBuffer) {
+    buffer = input;
+  } else {
+    throw new Error("Argument must be a Blob, File, or ArrayBuffer");
+  }
+
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer); // ✅ async
+
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+
+async function sendFile() {
+  const fileInput = document.getElementById("fileInput");
+  const file = fileInput.files[0];
+  const peerId = document.getElementById("peerIdSend").value;
+
+  if (!file || !peerId || !dataChannel || dataChannel.readyState !== "open") {
+    alert("Missing file, peer ID, or DataChannel not open.");
+    return;
+  }
+  
+  const arrayBuffer = await file.arrayBuffer(); // Convert File to ArrayBuffer
+  const hash = await computeHash(arrayBuffer);
+
+  console.log("Sending file to peer ID:", peerId);
+
+  // Send metadata first
+  dataChannel.send(JSON.stringify({
+    type: "metadata",
+    metadata: {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      hash: hash,
+    },
+  }));
+
+  // Then send the file buffer
+  dataChannel.send(arrayBuffer);
+}
+
+    </script>
+    
+    <script>
+      
+
+
       function getUsernameFromJwt(token) {
         try {
           const base64Url = token.split(".")[1];
@@ -323,9 +380,12 @@
         }
       }
 
-      const ws = new WebSocket("ws://localhost:8080");
-      let peerConnection;
+      const WSURL = `ws://${window.location.hostname}:8080`; 
+      const ws = new WebSocket(WSURL); 
+      let peerConnection; 
       let dataChannel;
+
+     
 
       const cookieval = document.cookie.replace("token=", "");
       console.log(cookieval);
@@ -408,44 +468,53 @@
         ws.send(JSON.stringify({ type: "answer", to: from, answer }));
       }
 
-      function sendFile() {
-        const file = document.getElementById("fileInput").files[0];
-        const receiverId = document.getElementById("peerIdSend").value;
-        if (!file || !dataChannel || dataChannel.readyState !== "open") {
-          return alert("No file selected or data channel is not open.");
-        }
+       
 
-        const reader = new FileReader();
-        reader.onload = () => {
-          const arrayBuffer = reader.result;
-          dataChannel.send(arrayBuffer);
-          alert(`File "${file.name}" sent.`);
-        };
-        reader.readAsArrayBuffer(file);
-      }
 
-      function handleReceivedMessage(event) {
-        const arrayBuffer = event.data;
-        const blob = new Blob([arrayBuffer]);
-        const url = URL.createObjectURL(blob);
+      let incomingFileMetadata = null;
 
-        // Create a button element with an ID
-        const downloadButton = document.createElement("button");
-        downloadButton.class = "buttonDownload";
-        downloadButton.textContent = "Download Received File";
-        downloadButton.onclick = () => {
-          const fileName = "received_file";
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = fileName;
-          link.click();
-          URL.revokeObjectURL(url);
-        };
+async function handleReceivedMessage(event) {
+  if (typeof event.data === "string") {
+    const message = JSON.parse(event.data);
+    if (message.type === "metadata") {
+      incomingFileMetadata = message.metadata;
+    }
+  } else if (incomingFileMetadata) {
+    const receivedBuffer = event.data;
+    const receivedHash = await computeHash(receivedBuffer);
 
-        // Append the button to the receivedFiles div
-        const receivedFilesDiv = document.getElementById("receivedFiles");
-        receivedFilesDiv.appendChild(downloadButton);
-      }
+    const isValid = receivedHash === incomingFileMetadata.hash;
+    
+    // Log hash verification result in the console
+    if (isValid) {
+      console.log(`✅ Hash verification successful: ${incomingFileMetadata.name}`);
+    } else {
+      console.log(`❌ Hash verification failed for: ${incomingFileMetadata.name}`);
+    }
+
+    // Create a blob from the received file buffer and generate a URL
+    const blob = new Blob([receivedBuffer], { type: incomingFileMetadata.type });
+    const url = URL.createObjectURL(blob);
+
+    // Create a download link
+    const downloadLink = document.createElement("a");
+    downloadLink.href = url;
+    downloadLink.download = incomingFileMetadata.name;
+    downloadLink.textContent = isValid
+      ? `✅ Download ${incomingFileMetadata.name}`
+      : `❌ Corrupted file: ${incomingFileMetadata.name} (Hash mismatch)`;
+
+    // Append the download link to the page
+    document.getElementById("receivedFiles").appendChild(downloadLink);
+    document.getElementById("receivedFiles").appendChild(document.createElement("br"));
+
+    // Reset for next file
+    incomingFileMetadata = null;
+  }
+}
+
+
+
     </script>
   </body>
 </html>
